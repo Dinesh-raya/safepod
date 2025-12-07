@@ -58,30 +58,109 @@ ALTER TABLE access_logs ENABLE ROW LEVEL SECURITY;
 -- Allow anyone to insert new sites (site creation)
 CREATE POLICY "allow_insert_sites" ON sites FOR INSERT WITH CHECK (true);
 
--- Allow anyone to select active sites (for authentication)
-CREATE POLICY "allow_select_active_sites" ON sites FOR SELECT USING (is_active = TRUE);
+-- Allow users to select only their own active site (for authentication)
+-- Note: This policy uses auth.uid() which requires JWT authentication
+-- For our app, we'll use application-level authentication instead
+CREATE POLICY "allow_select_own_site" ON sites FOR SELECT USING (
+    is_active = TRUE AND 
+    (auth.uid()::text = id::text OR auth.jwt() ->> 'role' = 'service_role')
+);
 
--- Allow updates to sites (for last_accessed timestamp)
-CREATE POLICY "allow_update_sites" ON sites FOR UPDATE USING (true);
+-- Allow users to update only their own site (for last_accessed timestamp)
+CREATE POLICY "allow_update_own_site" ON sites FOR UPDATE USING (
+    auth.uid()::text = id::text OR auth.jwt() ->> 'role' = 'service_role'
+);
 
 -- RLS Policies for tabs table
--- Allow insert for any authenticated user (through application logic)
-CREATE POLICY "allow_insert_tabs" ON tabs FOR INSERT WITH CHECK (true);
+-- Allow users to insert tabs only for their own site
+CREATE POLICY "allow_insert_own_tabs" ON tabs FOR INSERT WITH CHECK (
+    EXISTS (
+        SELECT 1 FROM sites 
+        WHERE sites.id = tabs.site_id 
+        AND (auth.uid()::text = sites.id::text OR auth.jwt() ->> 'role' = 'service_role')
+    )
+);
 
--- Allow select for any authenticated user
-CREATE POLICY "allow_select_tabs" ON tabs FOR SELECT USING (true);
+-- Allow users to select tabs only from their own site
+CREATE POLICY "allow_select_own_tabs" ON tabs FOR SELECT USING (
+    EXISTS (
+        SELECT 1 FROM sites 
+        WHERE sites.id = tabs.site_id 
+        AND (auth.uid()::text = sites.id::text OR auth.jwt() ->> 'role' = 'service_role')
+    )
+);
 
--- Allow update for any authenticated user
-CREATE POLICY "allow_update_tabs" ON tabs FOR UPDATE USING (true);
+-- Allow users to update tabs only from their own site
+CREATE POLICY "allow_update_own_tabs" ON tabs FOR UPDATE USING (
+    EXISTS (
+        SELECT 1 FROM sites 
+        WHERE sites.id = tabs.site_id 
+        AND (auth.uid()::text = sites.id::text OR auth.jwt() ->> 'role' = 'service_role')
+    )
+);
 
--- Allow delete for any authenticated user
-CREATE POLICY "allow_delete_tabs" ON tabs FOR DELETE USING (true);
+-- Allow users to delete tabs only from their own site
+CREATE POLICY "allow_delete_own_tabs" ON tabs FOR DELETE USING (
+    EXISTS (
+        SELECT 1 FROM sites 
+        WHERE sites.id = tabs.site_id 
+        AND (auth.uid()::text = sites.id::text OR auth.jwt() ->> 'role' = 'service_role')
+    )
+);
 
 -- RLS Policies for access_logs table
--- Allow insert for any authenticated user
+-- Allow users to insert logs only for their own site
+CREATE POLICY "allow_insert_own_access_logs" ON access_logs FOR INSERT WITH CHECK (
+    EXISTS (
+        SELECT 1 FROM sites 
+        WHERE sites.id = access_logs.site_id 
+        AND (auth.uid()::text = sites.id::text OR auth.jwt() ->> 'role' = 'service_role')
+    )
+);
+
+-- Allow users to select logs only from their own site
+CREATE POLICY "allow_select_own_access_logs" ON access_logs FOR SELECT USING (
+    EXISTS (
+        SELECT 1 FROM sites 
+        WHERE sites.id = access_logs.site_id 
+        AND (auth.uid()::text = sites.id::text OR auth.jwt() ->> 'role' = 'service_role')
+    )
+);
+
+-- Alternative simplified policies for application-level authentication
+-- These policies work without JWT authentication (using application logic)
+DROP POLICY IF EXISTS "allow_select_own_site" ON sites;
+DROP POLICY IF EXISTS "allow_update_own_site" ON sites;
+DROP POLICY IF EXISTS "allow_insert_own_tabs" ON tabs;
+DROP POLICY IF EXISTS "allow_select_own_tabs" ON tabs;
+DROP POLICY IF EXISTS "allow_update_own_tabs" ON tabs;
+DROP POLICY IF EXISTS "allow_delete_own_tabs" ON tabs;
+DROP POLICY IF EXISTS "allow_insert_own_access_logs" ON access_logs;
+DROP POLICY IF EXISTS "allow_select_own_access_logs" ON access_logs;
+
+-- Simplified policies for application-level authentication
+-- Allow anyone to select active sites (application handles ownership)
+CREATE POLICY "allow_select_active_sites" ON sites FOR SELECT USING (is_active = TRUE);
+
+-- Allow updates to sites (application handles ownership)
+CREATE POLICY "allow_update_sites" ON sites FOR UPDATE USING (true);
+
+-- Allow insert for any authenticated user (application handles ownership)
+CREATE POLICY "allow_insert_tabs" ON tabs FOR INSERT WITH CHECK (true);
+
+-- Allow select for any authenticated user (application handles ownership)
+CREATE POLICY "allow_select_tabs" ON tabs FOR SELECT USING (true);
+
+-- Allow update for any authenticated user (application handles ownership)
+CREATE POLICY "allow_update_tabs" ON tabs FOR UPDATE USING (true);
+
+-- Allow delete for any authenticated user (application handles ownership)
+CREATE POLICY "allow_delete_tabs" ON tabs FOR DELETE USING (true);
+
+-- Allow insert for any authenticated user (application handles ownership)
 CREATE POLICY "allow_insert_access_logs" ON access_logs FOR INSERT WITH CHECK (true);
 
--- Allow select for any authenticated user (site owners can see their logs)
+-- Allow select for any authenticated user (application handles ownership)
 CREATE POLICY "allow_select_access_logs" ON access_logs FOR SELECT USING (true);
 """
 
