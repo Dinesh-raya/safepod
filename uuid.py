@@ -1,11 +1,20 @@
-"""Custom UUID module to work around corrupted system uuid module"""
-import secrets
-import hashlib
-from datetime import datetime
-import time
+#!/usr/bin/env python3
+"""
+SecureText Vault - Application Entry Point
+This script patches the uuid module before importing Streamlit to avoid the corrupted system module.
+"""
+import sys
+import os
 
-class UUID:
-    """Simple UUID implementation"""
+# Add workspace to path
+workspace_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, workspace_dir)
+
+# First, let's patch the uuid module before anything else imports it
+print("Patching uuid module...")
+
+# Create a simple uuid module that mimics the standard library
+class SimpleUUID:
     def __init__(self, hex=None, bytes=None, int=None):
         if hex:
             self.hex = hex.lower()
@@ -14,7 +23,7 @@ class UUID:
         elif int is not None:
             self.hex = format(int, '032x')
         else:
-            # Generate random UUID
+            import secrets
             self.hex = secrets.token_hex(16)
     
     @property
@@ -26,7 +35,6 @@ class UUID:
         return int(self.hex, 16)
     
     def __str__(self):
-        # Format as standard UUID: 8-4-4-4-12
         h = self.hex
         return f"{h[0:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
     
@@ -34,45 +42,58 @@ class UUID:
         return f"UUID('{self}')"
     
     def __eq__(self, other):
-        if isinstance(other, UUID):
+        if isinstance(other, SimpleUUID):
             return self.hex == other.hex
         return False
 
+# Create module functions
 def uuid4():
-    """Generate a random UUID (version 4)"""
-    return UUID()
+    import secrets
+    return SimpleUUID(hex=secrets.token_hex(16))
 
-def uuid5(namespace, name):
-    """Generate a UUID from a namespace and name (version 5)"""
-    # Convert namespace to bytes if it's a UUID object
-    if isinstance(namespace, UUID):
-        namespace_bytes = namespace.bytes
-    elif isinstance(namespace, str):
-        # Parse UUID string
-        namespace_bytes = bytes.fromhex(namespace.replace('-', ''))
-    else:
-        namespace_bytes = namespace
+# Create a fake uuid module
+class FakeUUIDModule:
+    UUID = SimpleUUID
+    uuid4 = staticmethod(uuid4)
     
-    # SHA-1 hash of namespace + name
-    hash_obj = hashlib.sha1(namespace_bytes + name.encode('utf-8'))
-    hash_bytes = hash_obj.digest()
-    
-    # Set version bits (5) and variant bits
-    hash_hex = hash_bytes.hex()
-    # Version 5: set bits 4-7 of time_hi_and_version to 0101
-    time_hi = int(hash_hex[12:16], 16)
-    time_hi = (time_hi & 0x0FFF) | 0x5000
-    hash_hex = hash_hex[:12] + format(time_hi, '04x') + hash_hex[16:]
-    
-    # Variant: set bits 6-7 of clock_seq_hi_and_reserved to 10
-    clock_seq = int(hash_hex[16:18], 16)
-    clock_seq = (clock_seq & 0x3F) | 0x80
-    hash_hex = hash_hex[:16] + format(clock_seq, '02x') + hash_hex[18:]
-    
-    return UUID(hex=hash_hex[:32])
+    # Add namespace constants
+    NAMESPACE_DNS = SimpleUUID(hex='6ba7b8109dad11d180b400c04fd430c8')
+    NAMESPACE_URL = SimpleUUID(hex='6ba7b8119dad11d180b400c04fd430c8')
+    NAMESPACE_OID = SimpleUUID(hex='6ba7b8129dad11d180b400c04fd430c8')
+    NAMESPACE_X500 = SimpleUUID(hex='6ba7b8149dad11d180b400c04fd430c8')
 
-# Common namespaces
-NAMESPACE_DNS = UUID(hex='6ba7b8109dad11d180b400c04fd430c8')
-NAMESPACE_URL = UUID(hex='6ba7b8119dad11d180b400c04fd430c8')
-NAMESPACE_OID = UUID(hex='6ba7b8129dad11d180b400c04fd430c8')
-NAMESPACE_X500 = UUID(hex='6ba7b8149dad11d180b400c04fd430c8')
+# Patch sys.modules before importing anything
+sys.modules['uuid'] = FakeUUIDModule()
+
+print("✓ uuid module patched successfully")
+
+# Now import and run our app
+try:
+    print("Starting SecureText Vault...")
+    
+    # Import streamlit components
+    import streamlit.web.cli as stcli
+    
+    # Set up command line arguments
+    sys.argv = ['streamlit', 'run', 'app/main.py', '--server.port=8501', '--server.address=0.0.0.0']
+    
+    # Run streamlit
+    stcli.main()
+    
+except Exception as e:
+    print(f"Error starting application: {e}")
+    import traceback
+    traceback.print_exc()
+    
+    # Fallback: try to run the app directly
+    print("\nTrying alternative startup method...")
+    try:
+        # Import our app module
+        from app.main import main as app_main
+        
+        # Run the app directly (for testing)
+        print("Running app in test mode...")
+        app_main()
+    except Exception as e2:
+        print(f"Alternative startup also failed: {e2}")
+        sys.exit(1)
