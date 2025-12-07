@@ -2,6 +2,10 @@
 import streamlit as st
 import sys
 import os
+import json
+import re
+from datetime import datetime
+from typing import Tuple, Optional
 
 # Add custom uuid module to path before system packages
 sys.path.insert(0, '/workspace')
@@ -10,9 +14,71 @@ from app.config import config
 from app.services.auth_service import auth_service
 from app.services.supabase_client import supabase_client
 from app.constants import (
-    DEFAULT_TAB_NAME, MAX_TABS_PER_SITE,
-    EXPORT_FORMATS, EXPORT_OPTIONS
+    DEFAULT_TAB_NAME, MAX_TABS_PER_SITE, MAX_TAB_NAME_LENGTH,
+    MAX_CONTENT_SIZE_BYTES, EXPORT_FORMATS, EXPORT_OPTIONS,
+    ERROR_INVALID_USERNAME, ERROR_INVALID_PASSWORD_FORMAT
 )
+
+def validate_tab_name(tab_name: str) -> Tuple[bool, Optional[str]]:
+    """Validate tab name"""
+    if not tab_name or not isinstance(tab_name, str):
+        return False, "Tab name must be a non-empty string"
+    
+    if len(tab_name) > MAX_TAB_NAME_LENGTH:
+        return False, f"Tab name exceeds maximum length of {MAX_TAB_NAME_LENGTH} characters"
+    
+    # Allow letters, numbers, spaces, underscores, hyphens, and basic punctuation
+    if not re.match(r'^[a-zA-Z0-9 _\-.,!?()]+$', tab_name):
+        return False, "Tab name can only contain letters, numbers, spaces, and basic punctuation"
+    
+    return True, None
+
+def validate_content(content: str) -> Tuple[bool, Optional[str]]:
+    """Validate content size"""
+    content_size = len(content.encode('utf-8'))
+    if content_size > MAX_CONTENT_SIZE_BYTES:
+        return False, f"Content exceeds maximum size of {MAX_CONTENT_SIZE_BYTES} bytes"
+    
+    return True, None
+
+def export_as_text(content: str, username: str) -> str:
+    """Export content as plain text"""
+    return f"SecureText Vault Export\nUsername: {username}\nDate: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n{content}"
+
+def export_as_json(content: str, username: str) -> str:
+    """Export content as JSON"""
+    export_data = {
+        "username": username,
+        "export_date": datetime.now().isoformat(),
+        "content": content,
+        "content_length": len(content),
+        "application": "SecureText Vault"
+    }
+    return json.dumps(export_data, indent=2, ensure_ascii=False)
+
+def export_as_markdown(content: str, username: str) -> str:
+    """Export content as Markdown"""
+    return f"""# SecureText Vault Export
+
+**Username:** {username}  
+**Export Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  
+
+---
+
+{content}
+"""
+
+EXPORT_FUNCTIONS = {
+    "txt": export_as_text,
+    "json": export_as_json,
+    "md": export_as_markdown
+}
+
+EXPORT_MIME_TYPES = {
+    "txt": "text/plain",
+    "json": "application/json",
+    "md": "text/markdown"
+}
 
 def show_setup_instructions():
     """Show setup instructions when Supabase is not configured"""
@@ -167,7 +233,7 @@ def site_management_page(site):
         st.subheader("Tabs")
         
         # Get tabs from database
-        tabs = supabase_client.get_tabs(site['id'])
+        tabs = supabase_client.get_tabs_by_site(site['id'])
         st.session_state['tabs'] = tabs
         
         if tabs:
@@ -185,37 +251,64 @@ def site_management_page(site):
             # Create new tab button
             if len(tabs) < MAX_TABS_PER_SITE:
                 if st.button("➕ New Tab"):
-                    new_tab_name = st.text_input("Tab Name", placeholder="Enter tab name")
-                    if new_tab_name and st.button("Create"):
-                        new_tab = supabase_client.create_tab(site['id'], new_tab_name, len(tabs))
-                        if new_tab:
-                            st.success(f"Tab '{new_tab_name}' created!")
-                            st.rerun()
+                    with st.form("new_tab_form"):
+                        new_tab_name = st.text_input("Tab Name", placeholder="Enter tab name", max_chars=MAX_TAB_NAME_LENGTH)
+                        create_clicked = st.form_submit_button("Create")
+                        
+                        if create_clicked and new_tab_name:
+                            # Validate tab name
+                            is_valid, error_msg = validate_tab_name(new_tab_name)
+                            if not is_valid:
+                                st.error(f"Invalid tab name: {error_msg}")
+                            else:
+                                # Check if tab name already exists
+                                if new_tab_name in tab_names:
+                                    st.error(f"Tab '{new_tab_name}' already exists")
+                                else:
+                                    new_tab = supabase_client.create_tab(site['id'], new_tab_name, len(tabs))
+                                    if new_tab:
+                                        st.success(f"Tab '{new_tab_name}' created!")
+                                        st.rerun()
         else:
             # Create first tab
             st.info("No tabs yet. Create your first tab below.")
-            new_tab_name = st.text_input("First Tab Name", value=DEFAULT_TAB_NAME)
-            if st.button("Create First Tab"):
-                new_tab = supabase_client.create_tab(site['id'], new_tab_name, 0)
-                if new_tab:
-                    st.success(f"Tab '{new_tab_name}' created!")
-                    st.rerun()
+            with st.form("first_tab_form"):
+                new_tab_name = st.text_input("First Tab Name", value=DEFAULT_TAB_NAME, max_chars=MAX_TAB_NAME_LENGTH)
+                create_clicked = st.form_submit_button("Create First Tab")
+                
+                if create_clicked and new_tab_name:
+                    # Validate tab name
+                    is_valid, error_msg = validate_tab_name(new_tab_name)
+                    if not is_valid:
+                        st.error(f"Invalid tab name: {error_msg}")
+                    else:
+                        new_tab = supabase_client.create_tab(site['id'], new_tab_name, 0)
+                        if new_tab:
+                            st.success(f"Tab '{new_tab_name}' created!")
+                            st.rerun()
         
         # Export options
         st.subheader("Export")
-        export_format = st.selectbox("Format", list(EXPORT_OPTIONS.keys()))
+        export_format = st.selectbox("Format", options=list(EXPORT_OPTIONS.keys()), format_func=lambda x: EXPORT_OPTIONS[x])
         
         if st.button("📥 Export Content"):
             if st.session_state['current_tab']:
                 content = st.session_state['current_tab'].get('content', '')
-                export_data = EXPORT_FORMATS[export_format](content, site['username'])
-                
-                st.download_button(
-                    label=f"Download as {export_format.upper()}",
-                    data=export_data,
-                    file_name=f"{site['username']}_content.{export_format}",
-                    mime=EXPORT_OPTIONS[export_format]
-                )
+                if content:
+                    export_function = EXPORT_FUNCTIONS.get(export_format)
+                    if export_function:
+                        export_data = export_function(content, site['username'])
+                        
+                        st.download_button(
+                            label=f"Download as {EXPORT_OPTIONS[export_format]}",
+                            data=export_data,
+                            file_name=f"{site['username']}_content.{export_format}",
+                            mime=EXPORT_MIME_TYPES.get(export_format, "text/plain")
+                        )
+                    else:
+                        st.error(f"Export format '{export_format}' not supported")
+                else:
+                    st.warning("No content to export")
             else:
                 st.warning("Select a tab to export")
         
@@ -240,22 +333,45 @@ def site_management_page(site):
             key=f"editor_{tab['id']}"
         )
         
-        # Save button
-        if st.button("💾 Save", type="primary"):
-            if content != tab.get('content', ''):
-                success = supabase_client.update_tab_content(tab['id'], content)
-                if success:
-                    st.success("Content saved!")
-                    # Update local state
-                    tab['content'] = content
-                    st.session_state['current_tab'] = tab
-                else:
-                    st.error("Failed to save content")
-            else:
-                st.info("No changes to save")
+        # Character count and size warning
+        char_count = len(content)
+        content_size = len(content.encode('utf-8'))
+        size_percentage = (content_size / MAX_CONTENT_SIZE_BYTES) * 100
         
-        # Character count
-        st.caption(f"Characters: {len(content)}")
+        st.caption(f"Characters: {char_count} | Size: {content_size:,} bytes ({size_percentage:.1f}% of limit)")
+        
+        if content_size > MAX_CONTENT_SIZE_BYTES:
+            st.error(f"⚠️ Content exceeds maximum size of {MAX_CONTENT_SIZE_BYTES:,} bytes")
+        
+        # Save button
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("💾 Save", type="primary"):
+                if content != tab.get('content', ''):
+                    # Validate content size
+                    is_valid, error_msg = validate_content(content)
+                    if not is_valid:
+                        st.error(f"Cannot save: {error_msg}")
+                    else:
+                        try:
+                            updated_tab = supabase_client.update_tab_content(tab['id'], content)
+                            if updated_tab:
+                                st.success("Content saved!")
+                                # Update local state
+                                tab['content'] = content
+                                tab['updated_at'] = updated_tab.get('updated_at')
+                                st.session_state['current_tab'] = tab
+                                st.rerun()
+                            else:
+                                st.error("Failed to save content")
+                        except Exception as e:
+                            st.error(f"Error saving content: {str(e)}")
+                else:
+                    st.info("No changes to save")
+        
+        with col2:
+            if st.button("🔄 Refresh"):
+                st.rerun()
         
         # Last updated
         if tab.get('updated_at'):
@@ -281,6 +397,13 @@ def main():
     }
     .stTextInput > div > div > input {
         font-family: monospace;
+    }
+    .warning {
+        background-color: #fff3cd;
+        border: 1px solid #ffeaa7;
+        padding: 10px;
+        border-radius: 5px;
+        margin: 10px 0;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -328,6 +451,17 @@ def main():
     3. Organize content in multiple tabs
     4. Export your data when needed
     """)
+    
+    # Security notice
+    st.markdown("""
+    <div class="warning">
+    <strong>⚠️ Security Notice:</strong><br>
+    - Use a strong, unique password for each site<br>
+    - Never share your password with anyone<br>
+    - Export and backup your important content regularly<br>
+    - This service uses bcrypt password hashing and secure session tokens
+    </div>
+    """, unsafe_allow_html=True)
     
     # Create two columns for site creation and access
     col1, col2 = st.columns(2)
