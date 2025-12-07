@@ -21,6 +21,14 @@ SESSION_COOKIE_NAME = "securetext_session"
 # URL patterns
 SITE_URL_PATTERN = r"^[a-zA-Z0-9_-]+$"
 
+# Export configuration
+EXPORT_FORMATS = ["txt", "json", "md"]
+EXPORT_OPTIONS = {
+    "txt": "Text File (.txt)",
+    "json": "JSON File (.json)", 
+    "md": "Markdown File (.md)"
+}
+
 # Error messages
 ERROR_USERNAME_EXISTS = "Username already exists. Please choose a different username or access the existing site."
 ERROR_USERNAME_NOT_FOUND = "Site not found. Please check the username or create a new site."
